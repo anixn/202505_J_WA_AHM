@@ -1,2 +1,2 @@
 # 202505_J_WA_AHM
-Code and data for "Examining Water Body Area Dynamics in Ahmedabad City Employing Machine Learning Techniques"
+Code and data for "Unveiling Dynamics of Water Body Areas in Ahmedabad City Using Machine Learning Techniques"
