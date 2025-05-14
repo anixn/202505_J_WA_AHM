@@ -1,0 +1,314 @@
+# Load required packages
+
+```{r}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(readxl, lubridate, ggplot2, dplyr, tidyr, corrplot, forecast, ggcorrplot, Hmisc, tsibble, feasts, patchwork, readxl, zoo, fable, tseries)
+```
+
+# Import data
+```{r}
+library(lubridate)
+monthly_data <- read_excel("./01-analysis/data/Area_RF_Sea.xlsx", sheet = "Area_Monthly")
+
+# Preprocess
+df <- monthly_data %>%
+  mutate(
+    date = yearmonth(make_date(year, month)),  # Convert to year-month type
+    season = factor(seasons, levels = c("Winter", "Summer", "Monsoon"))
+  ) %>%
+  select(-index, -seasons) %>%
+  relocate(date) %>%
+  filter(wa_rf_ha > 0) %>%  # Remove zero-water-area observations
+  distinct(date, .keep_all = TRUE) %>%  # Ensure unique dates
+  arrange(date)
+
+# Create monthly time series
+ts_data <- df %>%
+  as_tsibble(index = date) %>%  # No need for `interval` argument
+  fill_gaps() %>%  # Fill missing months
+  mutate(across(where(is.numeric), zoo::na.locf, na.rm = FALSE))
+
+print(ts_data)
+```
+
+## 1. Correlation analysis
+```{r}
+cor_vars <- df %>% select(wa_cart_ha, wa_md_ha, wa_nb_ha, wa_rf_ha, precipitation_mm_mon, Temperature)
+
+# Correlation matrix with significance
+cor_matrix <- Hmisc::rcorr(as.matrix(cor_vars))
+
+# Visualization: Correlation plot
+library(ggcorrplot)
+cor_plot <- ggcorrplot(cor_matrix$r, hc.order = TRUE, type = "lower", lab = TRUE, p.mat = cor_matrix$P, insig = "blank") + theme_minimal(base_size = 12) + labs(title = "Correlation Matrix of Monthly Variables")
+
+ggsave("Correlation_monthly_all.pdf")
+```
+
+# 2. Time series decomposition
+```{r}
+library(fable)
+library(tsibble)
+library(feasts)  # For autoplot
+
+decomp_plot_cart <- ts_data %>%
+  model(STL(wa_cart_ha ~ season(window = 13), robust = TRUE)) %>%
+  components() %>%                   # Extract decomposition components
+  autoplot() +                       # Plot components
+  theme_bw(base_size = 12) +
+  labs(title = "STL Decomposition of CART Water Area")
+
+decomp_plot_md <- ts_data %>%
+  model(STL(wa_md_ha ~ season(window = 13))) %>%  # Use fable::STL
+  components() %>%                   # Extract decomposition components
+  autoplot() +                       # Plot components
+  theme_bw(base_size = 12) +
+  labs(title = "STL Decomposition of MD Water Area")
+
+decomp_plot_nb <- ts_data %>%
+  model(STL(wa_nb_ha ~ season(window = 13))) %>%  # Use fable::STL
+  components() %>%                   # Extract decomposition components
+  autoplot() +                       # Plot components
+  theme_bw(base_size = 12) +
+  labs(title = "STL Decomposition of NB Water Area")
+
+decomp_plot_rf <- ts_data %>%
+  model(STL(wa_rf_ha ~ season(window = 13))) %>%  # Use fable::STL
+  components() %>%                   # Extract decomposition components
+  autoplot() +                       # Plot components
+  theme_bw(base_size = 12) +
+  labs(title = "STL Decomposition of RF Water Area")
+
+combined_plot <- ((decomp_plot_cart | decomp_plot_md) / (decomp_plot_nb | decomp_plot_rf) ) + plot_annotation(tag_levels = 'A') & theme(plot.tag = element_text(face = "bold"))
+
+# ggsave("combined_analysis.pdf", combined_plot,  width = 16, height = 12, dpi = 300)
+
+ggsave("combined_analysis.png", combined_plot,  width = 16, height = 12, dpi = 300)
+```
+## Process the data
+```{r}
+data <- monthly_data
+data$date <- as.Date(paste(data$year, data$month, "01", sep = "-"))
+
+ts_data <- data %>%
+  mutate(
+    wa_cart_ha = ts(wa_cart_ha, start = c(2013, 1), frequency = 12),
+    wa_md_ha = ts(wa_md_ha, start = c(2013, 1), frequency = 12),
+    wa_nb_ha = ts(wa_nb_ha, start = c(2013, 1), frequency = 12),
+    wa_rf_ha = ts(wa_rf_ha, start = c(2013, 1), frequency = 12),
+    precipitation_mm_mon = ts(precipitation_mm_mon, start = c(2013, 1), frequency = 12),
+    Temperature = ts(Temperature, start = c(2013, 1), frequency = 12)
+  )
+```
+
+## 3.  Autocorrelation Analysis
+Perform autocorrelation and partial autocorrelation for all four classifiers.
+
+```{r}
+generate_acf_pacf <- function(variable, title_prefix) {
+  # ACF Plot (unchanged from your version)
+  acf_data <- Acf(ts_data[[variable]], lag.max = 36, plot = FALSE)
+  acf_df <- with(acf_data, data.frame(lag = lag, ACF = acf))
+
+  acf_plot <- ggplot(acf_df, aes(x = lag, y = ACF)) +
+    geom_bar(stat = "identity", position = "identity",
+             width = 0.2, fill = "#3f3f3f", color = NA) +
+    geom_point(size = 3, color = "#8a8a8a", shape = 19) +
+    geom_hline(yintercept = 0, color = "black", linewidth = 0.5) +
+    geom_hline(yintercept = c(-1.96, 1.96)/sqrt(length(ts_data[[variable]])),
+               linetype = "dashed", color = "red") +
+    scale_x_continuous(breaks = seq(0, 36, by = 6)) +
+    scale_y_continuous(limits = c(-1, 1)) +
+    labs(title = paste("Autocorrelation Function (", title_prefix, ")"),
+         x = "Lag", y = "Autocorrelation") +
+    theme_bw(base_size = 12) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          panel.grid.minor = element_blank())
+
+  # PACF Plot with identical styling
+  pacf_data <- Pacf(ts_data[[variable]], lag.max = 36, plot = FALSE)
+  pacf_df <- data.frame(lag = 1:length(pacf_data$acf),
+                       PACF = as.numeric(pacf_data$acf))
+
+  pacf_plot <- ggplot(pacf_df, aes(x = lag, y = PACF)) +
+    geom_bar(stat = "identity", position = "identity",
+             width = 0.2, fill = "#3f3f3f", color = NA) +
+    geom_point(size = 3, color = "#8a8a8a", shape = 19) +
+    geom_hline(yintercept = 0, color = "black", linewidth = 0.5) +
+    geom_hline(yintercept = c(-1.96, 1.96)/sqrt(length(ts_data[[variable]])),
+               linetype = "dashed", color = "#3639e6") +
+    scale_x_continuous(breaks = seq(0, 36, by = 6)) +
+    scale_y_continuous(limits = c(-0.8, 0.8)) +
+    labs(title = paste("Partial Autocorrelation Function (", title_prefix, ")"),
+         x = "Lag", y = "Partial Autocorrelation") +
+    theme_bw(base_size = 12) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          panel.grid.minor = element_blank())
+
+  # Print both plots (uncomment as needed)
+  print(acf_plot)
+  #print(pacf_plot)
+}
+
+# Generate ACF and PACF plots for all classifiers
+A <- generate_acf_pacf("wa_cart_ha", "WA CART")
+B <- generate_acf_pacf("wa_md_ha", "WA MD")
+C <- generate_acf_pacf("wa_nb_ha", "WA NB")
+D <- generate_acf_pacf("wa_rf_ha", "WA RF")
+
+E <- generate_acf_pacf("precipitation_mm_mon", "Precipitation")
+F <- generate_acf_pacf("Temperature", "Temperature")
+
+combined_plot <- ((A | B) / (C | D) / (E | F)) + plot_annotation(tag_levels = 'A') & theme(plot.tag = element_text(face = "bold"))
+print(combined_plot)
+
+ggsave("AF_combined_analysis.pdf", combined_plot,  width = 16, height = 12, dpi = 300)
+
+```
+
+## 4. Cross-Correlation with Precipitation and Temperature
+Perform cross-correlation analysis between each classifier and precipitation/temperature.
+
+```{r}
+generate_ccf <- function(classifier, variable, title_suffix) {
+  # Calculate CCF values
+  ccf_data <- ccf(ts_data[[classifier]], ts_data[[variable]], lag.max = 12, plot = FALSE)
+  ccf_df <- data.frame(lag = ccf_data$lag, CCF = ccf_data$acf)
+
+  # Create plot with consistent styling
+  ccf_plot <- ggplot(ccf_df, aes(x = lag, y = CCF)) +
+    geom_bar(stat = "identity", position = "identity",
+             width = 0.1, fill = "#3f3f3f", color = NA) +
+    geom_point(size = 1.5, color = "#8a8a8a", shape = 19) +
+    geom_hline(yintercept = 0, color = "black", linewidth = 0.5) +
+    geom_hline(yintercept = c(-1.96, 1.96)/sqrt(ccf_data$n.used),
+               linetype = "dashed", color = "#85002c") +
+    scale_x_continuous(breaks = seq(-12, 12, by = 2)) +
+    scale_y_continuous(limits = c(-1, 1)) +
+    labs(title = paste(title_suffix),
+         x = "Lag", y = "Cross-Correlation") +
+    theme_bw(base_size = 10) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          panel.grid.minor = element_blank())
+
+  print(ccf_plot)
+}
+
+# Generate CCF plots for all classifiers against precipitation and temperature
+classifiers <- c("wa_cart_ha", "wa_md_ha", "wa_nb_ha", "wa_rf_ha")
+variables <- c("precipitation_mm_mon", "Temperature")
+titles <- c("Precipitation", "Temperature")
+class_lab <- c("WA-CART", "WA-MD", "WA-NB", "WA-RF")
+
+List <- list()
+k = 1
+J = 1
+for (classifier in classifiers) {
+  for (i in seq_along(variables)) {
+    List[[k]] <- generate_ccf(classifier, variables[i], paste0(class_lab[J], " vs ",titles[i]))
+    k = k + 1
+  }
+  J = J +1
+}
+
+combined_plot_ccf <- ((List[[1]] | List[[2]] | List[[3]] | List[[4]]) / (List[[5]] | List[[6]] | List[[7]] | List[[8]])) + plot_annotation(tag_levels = 'A') & theme(plot.tag = element_text(face = "bold"))
+print(combined_plot_ccf)
+
+ggsave("Cross_Correlation.pdf", combined_plot_ccf,  width = 12, height = 6, dpi = 300)
+```
+
+
+## 5. Statistical Tests
+Perform Augmented Dickey-Fuller (ADF) and Ljung-Box tests for stationarity and randomness.
+
+```{r}
+# Perform ADF and Ljung-Box tests for all classifiers
+for (classifier in classifiers) {
+  cat("\n--- Results for", classifier, "---\n")
+
+  # ADF Test
+  adf_test <- tseries::adf.test(ts_data[[classifier]])
+  print(adf_test)
+
+  # Ljung-Box Test
+  ljung_box <- Box.test(ts_data[[classifier]], lag = 24, type = "Ljung-Box")
+  print(ljung_box)
+}
+```
+
+## 6. Seasonal Visualization
+Visualize seasonal patterns for all classifiers.
+
+```{r}
+# Define a function for seasonal boxplots
+generate_seasonal_plot <- function(classifier, title_suffix) {
+  seasonal_plot <- ggplot(ts_data, aes(x = month(date), y = .data[[classifier]])) +
+    geom_boxplot(aes(group = month(date))) +
+    stat_smooth(method = "loess", se = FALSE) +
+    theme_bw(base_size = 12) +
+    labs(
+      x = "Month",
+      y = paste("Water Area (ha) - ", title_suffix, sep = ""),
+      title = paste("Seasonal Pattern of Water Area (", title_suffix, ")", sep = "")
+    )
+
+  print(seasonal_plot)
+}
+
+List <- list()
+titles <- c("WA-CART", "WA-MD", "WA-NB", "WA-RF")
+k = 1
+for (i in seq_along(classifiers)) {
+    List[[k]] <- generate_seasonal_plot(classifier[i], titles[i])
+    k = k + 1
+}
+
+combined_plot_ccf <- ((List[[1]] | List[[2]]) / (List[[3]] | List[[4]])) + plot_annotation(tag_levels = 'A') & theme(plot.tag = element_text(face = "bold"))
+print(combined_plot_ccf)
+
+ggsave("Seasonal_Comb.pdf", combined_plot_ccf,  width = 6, height = 6, dpi = 300)
+
+```
+
+```{r}
+library(ggplot2)
+library(purrr)
+library(patchwork)
+library(lubridate)
+
+# First calculate global y-axis limits across all classifiers
+global_y_limits <- range(ts_data[, classifiers], na.rm = TRUE)
+
+# Define a function for seasonal boxplots with fixed y-limits
+generate_seasonal_plot <- function(classifier, title_suffix) {
+  ggplot(ts_data, aes(x = factor(month(date)), y = .data[[classifier]])) +
+    geom_boxplot(aes(group = month(date)), fill = "#e4e4e4", color = "#727272") +
+    stat_smooth(aes(x = month(date)), method = "loess", se = FALSE, color = "#e64949", linewidth = 0.7) +
+    theme_bw(base_size = 12) +
+    labs(
+      x = "Month",
+      y = expression(paste("Water Area (ha)")),
+      title = paste("Seasonal Pattern: ", title_suffix)
+    ) +
+    scale_x_discrete(labels = month.abb) +
+    scale_y_continuous(limits = global_y_limits) +  # Apply global limits
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+}
+
+# Classifiers and titles
+classifiers <- c("wa_cart_ha", "wa_md_ha", "wa_nb_ha", "wa_rf_ha")
+titles <- c("WA-CART", "WA-MD", "WA-NB", "WA-RF")
+
+# Generate plots and store in list
+plot_list <- map2(classifiers, titles, ~generate_seasonal_plot(.x, .y))
+
+# Combine plots with patchwork
+combined_plot <- (plot_list[[1]] | plot_list[[2]]) /
+                 (plot_list[[3]] | plot_list[[4]]) +
+                 plot_annotation(tag_levels = 'A') &
+                 theme(plot.tag = element_text(face = "bold"))
+
+# Save and display
+print(combined_plot)
+ggsave("Seasonal_Comb.pdf", combined_plot, width = 10, height = 8, dpi = 300)
+```

@@ -1,0 +1,619 @@
+---
+title: "Advanced Multi-Classifier Water Area Analysis with Climate Interactions"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# **1. Libraries and Data Loading**
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(mgcv)
+library(randomForest)
+library(cluster)
+library(factoextra)
+library(patchwork)
+library(ggridges)
+library(xgboost)
+library(vip)
+
+yearly <- read_excel("./01-analysis/data/Area_RF_Sea.xlsx", sheet = "Area_Yearly")
+monthly <- read_excel("./01-analysis/data/Area_RF_Sea.xlsx", sheet = "Area_Monthly") %>%
+mutate(Date = as.Date(paste(year, month, "01", sep = "-")), Season = factor(seasons, levels = c("Winter", "Summer", "Monsoon")))
+
+```
+
+---
+
+# **2. Groundbreaking Hypotheses & Analysis**
+
+## **Hypothesis 1: Classifier Consensus Under Climate Extremes**
+**Theory**: Classifiers disagree most during extreme climate conditions.
+
+```{r}
+# Calculate monthly classifier divergence
+monthly <- monthly %>%
+  mutate(
+    Stdev = pmap_dbl(select(., wa_cart_ha, wa_md_ha, wa_nb_ha, wa_rf_ha), ~ sd(c(...))),
+    Precip_Extreme = ifelse(precipitation_mm_mon > quantile(precipitation_mm_mon, 0.9), 1, 0),
+    Temp_Extreme = ifelse(abs(Temperature - median(Temperature)) > 5, 1, 0)
+  )
+
+# If you want to keep original values and only modify zeros
+monthly <- monthly %>%
+  mutate(Stdev = if_else(Stdev <= 0, 1e-8, Stdev))
+
+
+# Model divergence against extremes
+gam_divergence <- gam(Stdev ~ s(precipitation_mm_mon) + s(Temperature) + Precip_Extreme*Temp_Extreme,
+                      data = monthly, family = Gamma(link = "log"))
+summary(gam_divergence)
+```
+**Interpretation**:
+Here's a simple explanation of your results:
+
+**1. The Big Picture**
+You're studying when different classifiers ("decision tools") disagree most about land changes. Your model says two climate factors matter, but **not** the extreme weather events you originally thought.
+
+---
+
+**2. Key Findings**
+**A) What DOES affect disagreement:**
+- **Rainfall changes**: More rain = more disagreement (but this is a steady trend, not just extremes)
+- **Temperature**: Every degree warmer = *much more* disagreement (strongest effect)
+
+**B) What DOESN'T matter:**
+- Your defined "extreme rain days" (top 10% rainfall)
+- Your defined "extreme heat/cold days" (5°C+ from normal)
+- Combined extremes (model couldn't test this - likely no days had both extremes)
+
+---
+
+**3. Simple Translation**
+- Classifiers argue more when:
+  - It rains more (even normal rainy days)
+  - It gets hotter (any warming, not just extreme heat)
+- Your "extreme weather" labels don't explain extra disagreement
+
+---
+
+**4. Model Confidence**
+- Temperature effect is rock-solid (***)
+- Rainfall effect is real but weaker (**)
+- The model explains 25% of disagreement patterns → Other factors are at play too
+
+---
+
+**5. Next Steps**
+1. Check if you have **any days** with both extreme rain AND extreme temps
+2. Try redefining "extreme" (maybe 7°C+ instead of 5°C?)
+3. Look beyond weather - maybe human factors (harvests, fires) also cause disagreement
+
+**Takeaway**: Your tools are most sensitive to gradual warming and general rainfall patterns, not sudden extreme weather as you defined it.
+
+
+---
+
+## **Hypothesis 2: Classifier-Specific Climate Sensitivity**
+**Theory**: Each classifier responds uniquely to temperature/precipitation.
+
+```{r}
+classifiers <- c("wa_cart_ha", "wa_md_ha", "wa_nb_ha", "wa_rf_ha")
+
+# Function to fit GAMs for all classifiers
+fit_gams <- function(cls) {
+  formula <- as.formula(paste(cls, "~ s(precipitation_mm_mon) + s(Temperature) + s(as.numeric(Date))"))
+  gam(formula, data = monthly)
+}
+
+gams <- map(classifiers, fit_gams)
+map(gams, ~ summary(.x)$s.table) %>% setNames(classifiers)
+```
+
+## Plotting
+
+```{r}
+par(mfrow = c(2,2))
+plot(gams[[1]])
+plot(gams[[2]])
+plot(gams[[3]])
+plot(gams[[4]])
+
+```
+
+**Output/ Explanation**:
+
+**1. What You Tested**
+You checked if different AI classifiers (cart, md, nb, rf) react differently to:
+- Rainfall patterns 🌧️
+- Temperature changes 🌡️
+- Time trends 📅 (through "Date" smooth)
+
+**2. Key Findings**
+**All Classifiers**
+- **Rainfall** massively affects *all* classifiers (p≈0)
+- **Temperature** impacts everyone (p<0.001)
+- **Time trends** matter for all (p<0.05)
+
+**Unique Responses**
+| Classifier | Rain Pattern       | Temperature Pattern | Time Pattern       |
+|------------|--------------------|---------------------|--------------------|
+| **CART**   | Very wiggly 🎢     | Straight line ↗️    | Complex waves 🌊  |
+| **MD**     | Extreme curves 🌀  | Mild curve ➰       | Strong waves 🌊   |
+| **NB**     | Complex response 🎭| Slight curve ⎈      | Moderate waves 🌊 |
+| **RF**     | Most complex 🌪️   | Weak curve ~⎈      | Gentle waves 🌊   |
+
+**3. What "EDF" Means**
+- **EDF ≈ 1** = Straight line relationship
+- **EDF > 1** = Curvy/complex relationship
+- **Higher EDF** = More complex pattern
+
+**4. Simple Translation**
+- **Rainfall**: All tools struggle with rain patterns, but in different complicated ways
+- **Temperature**:
+  - CART reacts linearly (1°C = fixed change)
+  - Others have nuanced responses
+- **Time**: Hidden trends (seasonality? sensor drift?) affect predictions differently
+
+**5. Hypothesis Verdict** ✅ **Supported**
+- Each classifier has unique climate fingerprints:
+  - CART = Temperature purist 🌡️📏
+  - MD = Rain complexity specialist 🌧️🎭
+  - RF = Most rain-sensitive 🌧️⚠️
+
+**6. Next Steps**
+1. Visualize the wiggly curves (using `plot(gams[[1]])` etc.)
+2. Check if rain complexity matches real storm patterns
+3. Investigate what "Date" represents - sensor changes? seasonality?
+
+**Key Insight**: Your classifiers aren't interchangeable - they encode different climate sensitivities!
+
+---
+
+## **Hypothesis 3: Ensemble Meta-Model Superiority**
+**Theory**: Ensemble predictions outperform individual classifiers.
+```{r}
+# Load required libraries
+library(xgboost)
+library(dplyr)
+library(ggplot2)
+library(purrr)
+library(tidyr)
+library(CAST)
+library(caret)
+```
+
+### 1. Data Preparation ###
+```{r}
+# Create weighted consensus target generator
+create_consensus_target <- function(df, weights = c(0.5, 0.5)) {
+  df %>%
+    mutate(
+      Observed = weights[1] * wa_md_ha + weights[2] * wa_rf_ha,
+      Season = as.numeric(factor(Season)),  # Ordinal encoding
+      Month = lubridate::month(Date),  # Assuming date column exists
+      Year = lubridate::year(Date)
+    )
+}
+
+# Initialize with equal weights
+ensemble_data <- create_consensus_target(monthly)
+```
+
+### 2. Model Development ###
+```{r}
+# Spatial-temporal cross-validation setup
+create_spatial_folds <- function(data, space_var = "location_id", time_var = "Year", k = 5) {
+  data %>%
+    mutate(spacetime_group = interaction(.data[[space_var]], .data[[time_var]])) %>%
+    group_by(spacetime_group) %>%
+    mutate(fold = sample(rep(1:k, length.out = n()))) %>%
+    ungroup()
+}
+
+# Add synthetic location ID if not available
+set.seed(123)
+ensemble_data <- ensemble_data %>%
+  mutate(location_id = sample(1:10, nrow(.), replace = TRUE))
+
+# Create CV folds
+cv_data <- create_spatial_folds(ensemble_data, "location_id", "Year")
+
+train_xgb <- function(train_data, features, label = "Observed", nrounds = 500) {
+  # Create validation split from training data
+  set.seed(123)
+  valid_idx <- sample(nrow(train_data), 0.2 * nrow(train_data))
+  valid_data <- train_data[valid_idx, ]
+  train_sub <- train_data[-valid_idx, ]
+
+  # Create DMatrix objects
+  dtrain <- xgb.DMatrix(
+    data = as.matrix(train_sub[, features]),
+    label = train_sub[[label]]
+  )
+  dvalid <- xgb.DMatrix(
+    data = as.matrix(valid_data[, features]),
+    label = valid_data[[label]]
+  )
+
+  # Configure watchlist
+  watchlist <- list(train = dtrain, eval = dvalid)
+
+  xgb.train(
+    params = list(
+      objective = "reg:squarederror",
+      eta = 0.1,
+      max_depth = 6,
+      subsample = 0.8,
+      colsample_bytree = 0.8
+    ),
+    data = dtrain,
+    nrounds = nrounds,
+    early_stopping_rounds = 20,
+    watchlist = watchlist,
+    verbose = 0
+  )
+}
+```
+
+### 3. Weight Sensitivity Analysis ###
+```{r}
+# Initialize empty list to store results
+weight_results <- data.frame()
+
+# Define weight schemes as named list
+weight_schemes <- list(
+  equal = c(0.5, 0.5),
+  md_heavy = c(0.7, 0.3),
+  rf_heavy = c(0.3, 0.7)
+)
+
+# Loop through weight schemes
+for(scheme_name in names(weight_schemes)) {
+  # Get current weights
+  w <- weight_schemes[[scheme_name]]
+
+  # Create weighted data
+  weighted_data <- create_consensus_target(monthly, w)
+
+  # Split data
+  set.seed(123)
+  train_idx <- sample(nrow(weighted_data), 0.8 * nrow(weighted_data))
+  train_w <- weighted_data[train_idx, ]
+  test_w <- weighted_data[-train_idx, ]
+
+  # Train models
+  env_features <- c("precipitation_mm_mon", "Temperature", "Season")
+  stack_features <- c(env_features, "wa_cart_ha", "wa_md_ha", "wa_nb_ha", "wa_rf_ha")
+
+  env_model <- train_xgb(train_w, env_features)
+  stack_model <- train_xgb(train_w, stack_features)
+
+  # Calculate metrics
+  scheme_results <- test_w %>%
+    mutate(
+      Env_Pred = predict(env_model, as.matrix(test_w[, env_features])),
+      Stack_Pred = predict(stack_model, as.matrix(test_w[, stack_features]))
+    ) %>%
+    summarise(
+      Env_RMSE = sqrt(mean((Env_Pred - Observed)^2)),
+      Stack_RMSE = sqrt(mean((Stack_Pred - Observed)^2))
+    ) %>%
+    mutate(weight_scheme = scheme_name)
+
+  # Append to results
+  weight_results <- rbind(weight_results, scheme_results)
+}
+
+# Reorder columns
+weight_results <- weight_results[, c("weight_scheme", "Env_RMSE", "Stack_RMSE")]
+```
+
+
+### 4. Model Evaluation ###
+```{r}
+# Final model training with best weights
+final_data <- create_consensus_target(monthly, c(0.3, 0.7))
+set.seed(123)
+train_idx <- sample(nrow(final_data), (2/3) * nrow(final_data))
+train_data <- final_data[train_idx, ]
+test_data <- final_data[-train_idx, ]
+
+env_model <- train_xgb(train_data, env_features)
+stack_model <- train_xgb(train_data, stack_features)
+
+# Bootstrap uncertainty quantification
+n_boot <- 1000
+bootstrap_results <- map_df(1:n_boot, ~{
+  boot_sample <- test_data[sample(nrow(test_data), replace = TRUE), ]
+
+  boot_sample %>%
+    mutate(
+      Env_Pred = predict(env_model, as.matrix(boot_sample[, env_features])),
+      Stack_Pred = predict(stack_model, as.matrix(boot_sample[, stack_features]))
+    ) %>%
+    summarise(
+      Env_RMSE = sqrt(mean((Env_Pred - Observed)^2)),
+      Stack_RMSE = sqrt(mean((Stack_Pred - Observed)^2))
+    )
+})
+
+# Feature importance analysis
+feature_importance <- xgb.importance(
+  feature_names = stack_features,
+  model = stack_model
+)
+```
+
+### 5. Visualization ###
+```{r}
+# Performance comparison plot
+ggplot(bootstrap_results) +
+  geom_boxplot(aes(x = "Environmental Model", y = Env_RMSE), fill = "blue") +
+  geom_boxplot(aes(x = "Stacked Model", y = Stack_RMSE), fill = "red") +
+  labs(title = "Model Performance Distribution (1000 Bootstrap Samples)",
+       y = "RMSE", x = "") + theme_minimal()
+
+ggsave("performance_comp.pdf")
+```
+
+```{r}
+# Fixed feature importance analysis
+if(exists("feature_importance") && nrow(feature_importance) > 0) {
+  # Get top features (up to 7)
+  top_n <- min(7, nrow(feature_importance))
+
+  # Create plot with safety checks
+  feature_plot <- ggplot(feature_importance[1:top_n, ],
+                       aes(x = reorder(Feature, Gain), y = Gain)) +
+    geom_col(fill = "steelblue") +
+    coord_flip() +
+    labs(title = "Feature Importance in Stacked Model",
+         x = "Feature",
+         y = "Importance Score") +
+    theme_minimal()
+
+#   print(feature_plot)
+} else {
+  warning("Feature importance data not available - skipping plot")
+}
+ggsave("Featue of Importance1.pdf")
+
+# Alternative importance extraction if xgb.importance fails
+if(!exists("feature_importance") || nrow(feature_importance) == 0) {
+  # Manual importance extraction
+  importance_matrix <- xgb.importance(
+    feature_names = colnames(as.matrix(train_data[, stack_features])),
+    model = stack_model
+  )
+
+  if(nrow(importance_matrix) > 0) {
+    feature_plot <- ggplot(importance_matrix[1:min(7, nrow(importance_matrix)), ],
+                         aes(x = reorder(Feature, Gain), y = Gain)) +
+      geom_col(fill = "steelblue") +
+      coord_flip() +
+      labs(title = "Feature Importance (Alternative Calculation)") +
+      theme_minimal()
+    # print(feature_plot)
+  }
+}
+ggsave("Featue of Importance2.pdf")
+```
+
+```{r}
+# Temporal validation plot
+A <- test_data %>%
+  mutate(
+    Env_Pred = predict(env_model, as.matrix(test_data[, env_features])),
+    Stack_Pred = predict(stack_model, as.matrix(test_data[, stack_features]))
+  ) %>%
+  ggplot(aes(x = Month)) +
+  geom_line(aes(y = Observed), color = "black", size = 1) +
+  geom_line(aes(y = Env_Pred), color = "blue", alpha = 0.7) +
+  geom_line(aes(y = Stack_Pred), color = "red", alpha = 0.7) +
+  facet_wrap(~Year) + theme_minimal() +
+  labs(title = "Temporal Prediction Comparison",
+       subtitle = "Black: Consensus Target | Blue: Environmental Model | Red: Stacked Model")
+ggsave("Multiplot.pdf", width = 16)
+
+```
+
+### 6. Final Results Table ###
+```{r}
+final_performance <- test_data %>%
+  summarise(
+    Environmental_Model = sqrt(mean((predict(env_model, as.matrix(test_data[, env_features])) - Observed)^2)),
+    Stacked_Model = sqrt(mean((predict(stack_model, as.matrix(test_data[, stack_features])) - Observed)^2)),
+    Simple_Average = sqrt(mean((rowMeans(select(test_data, starts_with("wa_"))) - Observed)^2))
+  ) %>%
+  pivot_longer(everything(), names_to = "Model", values_to = "RMSE")
+
+knitr::kable(final_performance, caption = "Final Model Performance Comparison")
+```
+
+
+
+---
+## **Hypothesis 4: Critical Climate Thresholds**
+**Theory**: Water areas collapse below precipitation/temperature thresholds.
+
+```{r}
+library(broom)
+classifiers <- c("wa_cart_ha", "wa_md_ha", "wa_nb_ha", "wa_rf_ha")
+
+threshold_results <- map(classifiers, ~{
+  monthly %>%
+    mutate(Collapse = ifelse(!!sym(.x) < 500, 1, 0)) %>%  # Classifier-specific collapse
+    glm(Collapse ~ precipitation_mm_mon + Temperature,
+        data = ., family = "binomial") %>%
+    tidy()  # Get coefficient table
+}) %>% setNames(classifiers)
+
+# Print results
+threshold_results %>%
+  map(~ filter(.x, term %in% c("precipitation_mm_mon", "Temperature")))
+```
+
+**Enterpretation:**
+Here's a clear breakdown of your results from the threshold analysis (Hypothesis 4):
+
+---
+
+### **Key Findings Summary**
+| Classifier | Precipitation Effect (p-value) | Temperature Effect (p-value) | Sensitivity Ranking |
+|------------|--------------------------------|------------------------------|---------------------|
+| **CART**   | Weak + (0.159)                 | Moderate + (0.025*)          | Least sensitive     |
+| **MD**     | Strong + (0.017*)              | Moderate + (0.027*)          | Mid-tier            |
+| **NB**     | Strong + (0.017*)              | Moderate + (0.027*)          | Mid-tier            |
+| **RF**     | Very Strong + (0.002**)        | Very Strong + (0.001**)      | Most sensitive      |
+
+---
+
+**1. Interpreting Coefficients**
+- **Estimate**: How much 1 unit increase in the predictor affects log-odds of collapse
+- **Positive values** = Higher predictor values **increase** collapse risk
+- **Key translation**:
+  - For **RF**:
+    - 1mm ↑ rain → **exp(0.00409) = 1.0041x** higher collapse odds
+    - 1°C ↑ temp → **exp(0.241) = 1.27x** higher collapse odds
+
+---
+
+**2. Critical Patterns**
+**A) Precipitation Effects**
+- **RF** is most rain-sensitive (p=0.002):
+- 0.4% higher collapse odds per mm rainfall
+- **CART** shows no significant rain effect (p=0.159)
+- **MD/NB** agree (same coefficients) → Moderate sensitivity
+
+**B) Temperature Effects**
+- All classifiers agree: Heat increases collapse risk
+- **RF** again most sensitive: 27% higher odds per °C
+- **CART/MD/NB**: ~17% higher odds per °C
+
+**3. Hypothesis Support**
+- **Partially supported**:
+  - **Thresholds exist for temperature** (all classifiers agree)
+  - **Rain thresholds only matter for MD/NB/RF** (not CART)
+  - **RF detects strongest thresholds** (most sensitive to both factors)
+
+**4. Red Flags to Check**
+1. **Identical MD/NB Results**:
+   - Did they use similar algorithms?
+   - Check for accidental code duplication
+
+2. **CART's Insignificant Rain**:
+   - Is CART over-simplifying?
+   - Try adding rain-temperature interaction
+
+3. **Effect Sizes**:
+   - 27% higher collapse risk per °C (RF) is ecologically critical
+   - But model pseudo-R² likely low - other factors matter too
+
+---
+
+## **3. Advanced Visualizations: Climate-Water Area Phase Space**
+```{r}
+# Load required libraries
+library(ggplot2)
+library(viridisLite)
+library(ggnewscale)
+
+# monthly <- monthly[monthly$precipitation_mm_mon > 0, ]
+Bins <- c(monthly$wa_cart_ha, monthly$wa_md_ha, monthly$wa_nb_ha, monthly$wa_rf_ha)
+
+
+cut_width()
+
+
+# Create publication-ready plot
+A <- ggplot(monthly) +
+  # Density contours layer
+  geom_density_2d_filled(
+    aes(x = precipitation_mm_mon, y = Temperature, fill = after_stat(level)),
+    alpha = 0.85,
+    bins = 6,
+    show.legend = TRUE
+  ) +
+  scale_fill_viridis_d(  # Categorical for discrete density levels
+    name = "Density Level",
+    option = "plasma",
+    guide = guide_legend(
+      direction = "horizontal",
+      ncol = 3,
+      title.position = "top",
+      label.position = "bottom"
+    )
+  ) +
+
+  # Add new scale for points
+  new_scale_fill() +
+
+  # Water area points with dual encoding
+  geom_point(
+    aes(
+      x = precipitation_mm_mon,
+      y = Temperature,
+      size = wa_rf_ha,
+      fill = wa_rf_ha  # Color mapped to same variable
+    ),
+    shape = 21,  # Filled circle with outline
+    color = "white",  # White border for contrast
+    stroke = 0.3,
+    alpha = 0.9
+  ) +
+  scale_fill_viridis_c(  # Continuous for water area
+    name = "Water Area (ha)",
+    option = "magma",
+    guide = guide_colorbar(
+      frame.colour = "black",
+      ticks.colour = "gray30",
+      barwidth = 15,
+      barheight = 0.8
+    )
+  ) +
+
+  # Axis formatting
+  labs(
+    x = expression(bold("Monthly Precipitation (mm month"^-1*")")),
+    y = expression(bold("Temperature ("*degree*"C)")),
+    title = "Climate-Water Area Phase Space Dynamics",
+    subtitle = "Point size and color intensity indicate water area magnitude",
+    caption = "Data: Monthly climate metrics | Analysis: Density-based spatial distribution"
+  ) +
+
+  # Publication theme
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.caption = element_text(size = 8, color = "gray40", hjust = 1),
+    aspect.ratio = 1,
+    panel.grid.major = element_line(color = "#f0f0f0", linewidth = 0.3),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "#cccccc", fill = NA, size = 0.5),
+    axis.text = element_text(color = "#333333"),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    legend.spacing.x = unit(0.5, "cm"),
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 9)
+  ) +
+
+  # Scale adjustments
+  scale_size_continuous(
+    range = c(1, 8),
+    name = "Water Area (ha)",
+    breaks = scales::pretty_breaks(n = 5)
+  ) +
+  scale_x_continuous(expand = expansion(mult = 0.05)) +
+  scale_y_continuous(expand = expansion(mult = 0.05))
+
+# Save high-resolution plot
+ggsave("phase_space_RF.pdf", width = 16, height = 10, units = "in")
+```

@@ -1,0 +1,281 @@
+---
+Title: Title of your paper
+date: 05 April 2025
+---
+
+### **Step 1: Load Libraries and Data**
+```{R}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(tidyr)
+library(ggcorrplot)
+library(patchwork)
+
+# Load data
+yearly_data <- read_excel("./01-analysis/data/Area_RF_Sea.xlsx", sheet = "Area_Yearly")
+monthly_data <- read_excel("./01-analysis/data/Area_RF_Sea.xlsx", sheet = "Area_Monthly")
+```
+
+## Step 01: Yearly data analysis
+
+### 1. Annual Trends for All Classifiers
+```{R}
+yearly_long <- yearly_data %>%
+  pivot_longer(cols = starts_with("wa"), names_to = "Classifier", values_to = "Area")
+
+classifier_colors <- c("#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02")
+
+# Create the plot with points, lines, and trend lines
+ggplot(yearly_long, aes(x = year, y = Area, color = Classifier)) +
+  geom_point(size = 3, shape = 21, fill = "white", stroke = 1) +
+  geom_line(linewidth = 0.5, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1, linetype = "dashed") +
+  scale_x_continuous(breaks = seq(2013, 2024, by = 1)) +
+  scale_color_manual(values = classifier_colors) +
+  labs(
+    title = "Annual Water Area by Classifier (2013-2024)",
+    x = "Year",
+    y = "Area (Ha)",
+    color = "Classifier"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    legend.position = c(0.05, 0.95),
+    legend.justification = c(0, 1),
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.background = element_rect(color = "black", fill = "white", linewidth = 0.5),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5),
+    plot.margin = margin(10, 10, 10, 10, "pt")
+  )
+
+ggsave("Annual Water Area by Class1.pdf", width = 10, height = 7.5, units = "in")
+```
+
+### 2. Correlation Matrix for yearly data
+```{R}
+library(ggplot2)
+library(ggcorrplot)
+library(dplyr)
+
+# Compute the correlation matrix
+cor_matrix <- yearly_data %>%
+  select(
+    WA_CART = `WA-CART-Yr-Ha`,
+    WA_mD = `WA-mD-Yr-Ha`,
+    WA_NB = `WA-NB-Yr-Ha`,
+    WA_RF = `WA-RF-Yr-Ha`,
+    Precipitation = `Precip(mm/Yr)`
+  ) %>% cor()
+
+# Define a professional color palette (using RColorBrewer or viridis)
+library(RColorBrewer)
+colors <- brewer.pal(3, "RdBu")  # Red-Blue diverging palette
+
+# Create the correlation matrix plot
+ggcorrplot(
+  cor_matrix,
+  method = "square",              # Square shape for cells
+  type = "lower",                 # Show only the lower triangle
+  lab = TRUE,                     # Display correlation values inside cells
+  lab_size = 4,                   # Font size for correlation labels
+  colors = colors,                # Use professional color palette
+  title = "Correlation Matrix (Yearly Data)",  # Title of the plot
+  ggtheme = theme_minimal(),      # Minimalistic theme
+  outline.color = "gray50",       # Add subtle outlines to cells
+  legend.title = "Correlation"    # Legend title
+) +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),  # Centered bold title
+    axis.text = element_text(size = 10),                               # Smaller axis text
+    axis.title = element_text(size = 12, face = "bold"),               # Bold axis titles
+    legend.text = element_text(size = 10),                             # Smaller legend text
+    legend.title = element_text(size = 10, face = "bold"),             # Bold legend title
+    panel.grid.major = element_blank(),                                # Remove major grid lines
+    panel.grid.minor = element_blank(),                                # Remove minor grid lines
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5),  # Add border to plot area
+    plot.margin = margin(10, 10, 10, 10, "pt")                         # Add margins around the plot
+  )
+
+ggsave("Yearly_correlation.svg")
+
+```
+
+## Step 2: Monthly Analysis
+### Seasonal Boxplots for (WA-RF-Ha)
+
+```{r}
+monthly_data <- read_excel("./01-analysis/data/Area_RF_Sea.xlsx", sheet = "Area_Monthly")
+
+monthly_data$Seasons <- factor(monthly_data$seasons,
+                               levels = c("Winter", "Summer", "Monsoon"))
+
+long_data <- monthly_data %>%
+  pivot_longer(cols = c(wa_cart_ha, wa_md_ha, wa_nb_ha, wa_rf_ha),
+               names_to = "Classifier", values_to = "Area_Ha")
+
+custom_palette <- c("#1B9E77", "#D95F02", "#7570B3", "#E7298A")
+ggplot(long_data, aes(x = Seasons, y = Area_Ha, fill = Classifier)) +
+  stat_boxplot(geom = "errorbar", width = 0.3, linewidth = 0.7, position = position_dodge(0.75)) +
+  geom_boxplot(outlier.shape = NA, linewidth = 0.7, alpha = 0.9) +
+  scale_fill_manual(values = custom_palette) +
+  labs(title = "Seasonal Distribution of Water Area by Classifiers",
+       x = "Season", y = "Area (Ha)",
+       fill = "Classifier") +
+  coord_cartesian(ylim = c(0, 3500)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 9),
+    panel.grid.major = element_line(color = "gray90", linewidth = 0.3),
+    panel.grid.minor = element_line(color = "gray95", linewidth = 0.2),
+    legend.position = c(0.95, 0.95),
+    legend.justification = c(1, 1),
+    legend.background = element_rect(fill = "white", color = "black", size = 0.5),
+    plot.background = element_rect(fill = "white"),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5)
+  )
+
+ggsave("Monthly Boxplot.svg", width = 10, height = 7.5, units = "in")
+```
+
+### Monthly Trends (Faceted by Year)
+```{R}
+monthly_data$Month <- factor(monthly_data$Month, labels = month.abb)
+
+ggplot(monthly_data, aes(x = Month, y = `WA-RF-Ha`, group = year, color = year)) +
+  geom_line() +
+  facet_wrap(~year) +
+  labs(title = "Monthly RF Water Area by Year",
+       x = "Month", y = "Area (Ha)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45))
+```
+
+### **Step 4: Advanced Analysis : Time Series Decomposition (WA-RF-Ha)
+```{r}
+library(forecast)
+library(ggplot2)
+library(patchwork) # For combining plots
+
+# Define a consistent, high-contrast color palette
+custom_palette <- c("#1B9E77", "#D95F02", "#7570B3", "#E7298A")
+
+# List of classifiers to analyze
+classifiers <- c("WA-CART-Ha", "WA-mD-Ha", "WA-NB-Ha", "WA-RF-Ha")
+
+# Function to create decomposition plots for each classifier
+create_decomposition_plot <- function(classifier, data, color) {
+  # Convert to time series object
+  ts_data <- ts(data[[classifier]], frequency = 12, start = c(2013, 1))
+
+  # Decompose into trend, seasonality, and residuals
+  decomp <- stl(ts_data, s.window = "periodic")
+
+  # Create the plot
+  p <- autoplot(decomp) +
+    labs(
+      title = paste("Time Series Decomposition of", classifier),
+      x = "Year",
+      y = "Area (Ha)"
+    ) +
+    scale_color_manual(values = color) + # Use custom color
+    theme_minimal() +
+    theme(
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5), # Centered title
+      axis.title = element_text(size = 12),
+      axis.text = element_text(size = 10),
+      legend.position = "none", # Remove legend for simplicity
+      panel.grid.major = element_line(color = "gray90", linewidth = 0.3),
+      panel.grid.minor = element_blank()
+    )
+
+  return(p)
+}
+
+# Generate individual plots for each classifier
+plots <- lapply(seq_along(classifiers), function(i) {
+  create_decomposition_plot(classifiers[i], monthly_data, custom_palette[i])
+})
+
+# Combine all plots into a single multi-panel figure
+combined_plot <- wrap_plots(plots, ncol = 2) +
+  plot_annotation(title = "Time Series Decomposition by Classifier",
+                  theme = theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5)))
+
+# Save the combined plot as a high-resolution image
+ggsave("Time_Series_Decomposition.png", combined_plot, width = 12, height = 10, dpi = 300)
+```
+
+## Create the summary table
+```{r}
+# Load required libraries
+library(readxl)
+library(dplyr)
+library(tidyr)
+
+data <- read_excel("./01-analysis/data/Area_RF_Sea.xlsx", sheet = "Area_Monthly")
+
+# Handle NA values (replace NA with NA to keep them, but ensure calculations handle them)
+data <- data %>%
+  mutate(across(where(is.numeric), ~ifelse(is.na(.), NA, .)))
+
+# Create season-wise summary statistics for key variables
+season_summary <- data %>%
+  group_by(seasons) %>%
+  summarise(
+    # Water area summaries (mean ± sd)
+    wa_cart_mean = mean(wa_cart_ha, na.rm = TRUE),
+    wa_cart_med = median(wa_cart_ha, na.rm = TRUE),
+    wa_cart_sd = sd(wa_cart_ha, na.rm = TRUE),
+    wa_md_mean = mean(wa_md_ha, na.rm = TRUE),
+    wa_md_med = median(wa_md_ha, na.rm = TRUE),
+    wa_md_sd = sd(wa_md_ha, na.rm = TRUE),
+    wa_nb_mean = mean(wa_nb_ha, na.rm = TRUE),
+    wa_nb_med = median(wa_nb_ha, na.rm = TRUE),
+    wa_nb_sd = sd(wa_nb_ha, na.rm = TRUE),
+    wa_rf_mean = mean(wa_rf_ha, na.rm = TRUE),
+    wa_rf_med = median(wa_rf_ha, na.rm = TRUE),
+    wa_rf_sd = sd(wa_rf_ha, na.rm = TRUE),
+
+    # Precipitation summary
+    precip_mean = mean(precipitation_mm_mon, na.rm = TRUE),
+    precip_med = median(precipitation_mm_mon, na.rm = TRUE),
+    precip_sd = sd(precipitation_mm_mon, na.rm = TRUE),
+
+    era5_temp_mean = mean(Temperature, na.rm = TRUE),
+    era5_temp_med = median(Temperature, na.rm = TRUE),
+    era5_temp_sd = sd(Temperature, na.rm = TRUE),
+
+    # Count of observations
+    n = n(),
+    .groups = 'drop'
+  ) %>%
+  mutate(across(where(is.numeric), ~round(., 2))) %>%
+  mutate(seasons = factor(seasons, levels = c("Winter", "Summer", "Monsoon")))
+
+# Format for publication (combine mean ± sd)
+season_summary_formatted <- season_summary %>%
+  mutate(
+    wa_cart = sprintf("%.1f ± %.1f", wa_cart_mean, wa_cart_med, wa_cart_sd),
+    wa_md = sprintf("%.1f ± %.1f", wa_md_mean, wa_md_med, wa_md_sd),
+    wa_nb = sprintf("%.1f ± %.1f", wa_nb_mean, wa_nb_med, wa_nb_sd),
+    wa_rf = sprintf("%.1f ± %.1f", wa_rf_mean, wa_rf_med, wa_rf_sd),
+    precipitation = sprintf("%.1f ± %.1f", precip_mean, precip_med, precip_sd),
+    era5_temp = sprintf("%.1f ± %.1f", era5_temp_mean, era5_temp_med, era5_temp_sd)
+  ) %>%
+  select(seasons, n, wa_cart, wa_md, wa_nb, wa_rf, precipitation, era5_temp)
+
+season_summary_formatted
+```

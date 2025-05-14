@@ -1,0 +1,321 @@
+# Basic Hypothesis testing
+
+### **1. Data Loading and Preprocessing**
+
+```{r}
+# Load required libraries
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+# library(forecast)
+library(mgcv)
+library(corrplot)
+library(ggpubr)
+library(cluster)
+library(factoextra)
+
+# Load data
+yearly <- read_excel("./01-analysis/data/Area_RF_Sea.xlsx", sheet = "Area_Yearly")
+monthly <- read_excel("./01-analysis/data/Area_RF_Sea.xlsx", sheet = "Area_Monthly")
+
+# Preprocess monthly data: Create a Date column
+monthly <- monthly %>%
+  mutate(Date = as.Date(paste(year, month, "01", sep = "-"), format = "%Y-%m-%d"))
+```
+---
+
+### **2. Yearly Data Analysis**
+#### **Hypothesis 1: Water area has changed significantly over time**
+```{r}
+yearly_long <- yearly %>%
+  pivot_longer(
+    cols = starts_with("wa_"),
+    names_to = "Classifier",
+    values_to = "Area"
+  ) %>%
+  mutate(
+    Classifier = gsub("wa_", "", Classifier),
+    Classifier = factor(Classifier)
+  )
+
+# Professional color palette (colorblind-friendly + print-friendly)
+line_colors <- c("#1a476f", "#90353b", "#55752f", "#e37e00", "#6e8e84")
+
+ggplot(yearly_long, aes(x = year, y = Area,
+                       color = Classifier)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(
+    size = 3,
+    aes(),
+    show.legend = FALSE
+  ) +
+  labs(
+    x = "Year",
+    y = expression(Water~Area~(ha))
+  ) +
+  scale_x_continuous(
+    breaks = seq(min(yearly_long$year), max(yearly_long$year), by = 2),
+    limits = c(min(yearly_long$year), max(yearly_long$year)),
+    expand = expansion(mult = 0.02)
+  ) +
+  scale_y_continuous(
+    labels = scales::comma,
+    expand = expansion(mult = c(0.05, 0.1))
+  ) +
+  scale_color_manual(values = line_colors) +
+  scale_shape_manual(values = c(16, 17, 15, 18, 8)) +  # Different point shapes
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.key.width = unit(1.5, "cm"),  # Wider legend keys
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(linewidth = 0.2),
+    axis.line = element_line(color = "black"),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 0.5),
+    plot.margin = unit(c(5,5,5,5), "mm"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(color = "black")
+  )
+
+# Save with optimal settings
+ggsave("yearly_wa_trend.pdf",
+       width = 10,
+       height = 8,
+       units = "in",
+       device = cairo_pdf)  # Better font handling
+```
+
+**Figure 1**: All classifiers show variability, but RF (Random Forest) exhibits a slight decline.
+**Interpretation**: Visual trends suggest changes, but statistical validation is needed.
+
+**Statistical Test**:
+```{r}
+# Mann-Kendall trend tests for all water area classifiers
+if (!require(trend)) { install.packages('trend'); library(trend)}
+
+# CART water area ---------------------------------------------
+mk_test_cart_yr <- mk.test(yearly$wa_cart_yr_ha)
+cat("\nMann-Kendall Trend Test for CART Water Area Yearly:\n")
+print(mk_test_cart_yr)
+
+mk_test_cart <- mk.test(monthly$wa_cart_ha)
+cat("\nMann-Kendall Trend Test for CART Water Area Monthly:\n")
+print(mk_test_cart)
+
+
+# MD water area---------------------------------------------
+mk_test_md_yr <- mk.test(yearly$wa_md_yr_ha)
+cat("\nMann-Kendall Trend Test for MD Water Area Yearly:\n")
+print(mk_test_md_yr)
+
+mk_test_md <- mk.test(monthly$wa_md_ha)
+cat("\nMann-Kendall Trend Test for MD Water Area Monthly:\n")
+print(mk_test_md)
+
+
+# NB water area---------------------------------------------
+mk_test_nb_yr <- mk.test(yearly$wa_nb_yr_ha)
+cat("\nMann-Kendall Trend Test for NB Water Area Yearly:\n")
+print(mk_test_nb_yr)
+
+mk_test_nb <- mk.test(monthly$wa_nb_ha)
+cat("\nMann-Kendall Trend Test for NB Water Area Monthly:\n")
+print(mk_test_nb)
+
+# RF water area ---------------------------------------------
+mk_test_rf_yr <- mk.test(yearly$wa_rf_yr_ha)
+cat("\nMann-Kendall Trend Test for RF Water Area Yearly:\n")
+print(mk_test_rf_yr)
+
+mk_test_rf <- mk.test(monthly$wa_rf_ha)
+cat("\nMann-Kendall Trend Test for RF Water Area Monthly:\n")
+print(mk_test_rf)
+
+```
+**Output**
+
+### **Interpreting the Mann-Kendall Trend Test Output**
+
+The **Mann-Kendall (MK) test** is a non-parametric method used to detect trends in time-series data. Below is an explanation of the key components of the output for each classifier (CART, MD, NB, and RF):
+
+#### **C) `tau` (Kendall's Tau Coefficient)**
+- Measures **trend strength and direction**:
+  - **Range**: `-1` (perfect decreasing trend) to `+1` (perfect increasing trend)
+  - **`tau ≈ 0`** → No trend
+  - **`tau > 0`** → Increasing trend
+  - **`tau < 0`** → Decreasing trend
+
+#### **D) `S` (Kendall's S Statistic)**
+- Sum of score differences between all pairs of data points.
+  - **Higher `|S|`** → Stronger trend
+  - **`S = 0`** → No trend
+
+### **3. Interpretation of Your Results**
+#### **a) CART Water Area (`p = 0.2714`)**
+- **`z = 1.0997`** (slight positive trend)
+- **`p = 0.2714`** (**Not significant**, `p > 0.05`)
+- **`tau = 0.2595`** (weak increasing trend)
+- **Conclusion**: **No significant trend**
+
+#### **b) MD Water Area (`p = 0.04674`)**
+- **`z = 1.9886`** (moderate positive trend)
+- **`p = 0.04674`** (**Significant**, `p < 0.05`)
+- **`tau = 0.4545`** (moderate increasing trend)
+- **Conclusion**: **Significant increasing trend**
+
+#### **c) NB Water Area (`p = 0.003192`)**
+- **`z = 2.9486`** (strong positive trend)
+- **`p = 0.003192`** (**Highly significant**, `p < 0.01`)
+- **`tau = 0.6667`** (strong increasing trend)
+- **Conclusion**: **Highly significant increasing trend**
+
+#### **d) RF Water Area (`p = 0.3704`)**
+- **`z = 0.89566`** (slight positive trend)
+- **`p = 0.3704`** (**Not significant**, `p > 0.05`)
+- **`tau = 0.2154`** (weak increasing trend)
+- **Conclusion**: **No significant trend**
+
+---
+
+### **4. Summary Table**
+| Classifier | `z`-value | `p`-value | Kendall's Tau (`τ`) | Trend Significance |
+|------------|----------|----------|------------------|------------------|
+| **CART**   | 1.0997   | 0.2714   | 0.2595           | Not significant  |
+| **MD**     | 1.9886   | **0.04674** | 0.4545         | **Significant ↑** |
+| **NB**     | 2.9486   | **0.003192** | 0.6667       | **Highly Significant ↑** |
+| **RF**     | 0.89566  | 0.3704   | 0.2154           | Not significant  |
+
+### **5. Key Takeaways**
+- **MD and NB** show **significant increasing trends** in water area.
+- **CART and RF** show **no significant trends**.
+- **NB has the strongest trend** (`τ = 0.6667`, `p < 0.01`).
+
+---
+
+### **3. Monthly Data Analysis**
+
+**Statistical Test**:
+```{r}
+# ANOVA for seasonal (monthly) differences in water area
+anova_cart <- aov(wa_cart_ha ~ Month, data = monthly)
+anova_md   <- aov(wa_md_ha ~ Month, data = monthly)
+anova_nb   <- aov(wa_nb_ha ~ Month, data = monthly)
+anova_rf   <- aov(wa_rf_ha ~ Month, data = monthly)
+
+# Summarize results
+cat("\nANOVA for CART Water Area by Month:\n")
+summary(anova_cart)
+
+cat("\nANOVA for MD Water Area by Month:\n")
+summary(anova_md)
+
+cat("\nANOVA for NB Water Area by Month:\n")
+summary(anova_nb)
+
+cat("\nANOVA for RF Water Area by Month:\n")
+summary(anova_rf)
+
+TukeyHSD(anova_cart)
+boxplot(wa_cart_ha ~ Month, data = monthly, main = "CART Water Area by Month")
+```
+
+**Interpretation of the ANOVA Output for Seasonal (Monthly) Differences**
+
+ANOVA (Analysis of Variance) tests whether there are **statistically significant differences** in water area across different months for each classifier (CART, MD, NB, RF). Here’s how to interpret the results:
+
+
+**D) F-statistic (`F value`)**
+- **F = `Month Mean Sq / Residuals Mean Sq`**
+  - Tests if **monthly variation is larger than random noise**.
+  - **Higher F = Stronger evidence of seasonal differences**.
+
+**E) p-value (`Pr(>F)`)**
+- **Determines statistical significance**:
+  - **p < 0.05 → Significant seasonal differences.**
+  - **p ≥ 0.05 → No significant differences.**
+- **Significance codes**:
+  - `***` (p < 0.001), `**` (p < 0.01), `*` (p < 0.05), `.` (p < 0.1).
+
+
+### **4. Summary Table**
+| Classifier | F-value | p-value       | Significance | Conclusion                     |
+|------------|---------|---------------|--------------|--------------------------------|
+| **CART**   | 6.371   | **2.13e-08**  | ***          | Extremely strong seasonality   |
+| **MD**     | 5.679   | **1.94e-07**  | ***          | Very strong seasonality        |
+| **NB**     | 4.528   | **8.36e-06**  | ***          | Strong seasonality             |
+| **RF**     | 2.821   | **0.00244**   | **           | Moderate seasonality           |
+
+
+
+#### **Hypothesis 4: Classifiers agree on water area estimates: Bland-Altman Plot**
+1. Purpose of the Plots
+Bland-Altman plots assess agreement between two measurement methods (in this case, classifiers). They answer:
+
+Do the classifiers systematically over/underestimate water area compared to each other?
+
+How large are the discrepancies between classifiers?
+
+Are disagreements consistent across all water area magnitudes?
+
+2. Key Components of Each Subplot
+X-axis: Mean of two classifiers
+Represents the "average truth" between the two methods.
+Y-axis: Difference between two classifiers
+Positive values → First classifier overestimates relative to the second.
+Negative values → First classifier underestimates.
+Red horizontal line: Mean bias (average difference).
+Dashed line: Perfect agreement (y = 0).
+
+```{r}
+library(ggplot2)
+library(patchwork)
+
+# Calculate global y-axis limits for all differences
+cart_md_diff <- monthly$wa_cart_ha - monthly$wa_md_ha
+cart_nb_diff <- monthly$wa_cart_ha - monthly$wa_nb_ha
+cart_rf_diff <- monthly$wa_cart_ha - monthly$wa_rf_ha
+md_nb_diff <- monthly$wa_md_ha - monthly$wa_nb_ha
+md_rf_diff <- monthly$wa_md_ha - monthly$wa_rf_ha
+nb_rf_diff <- monthly$wa_nb_ha - monthly$wa_rf_ha
+
+all_diffs <- c(cart_md_diff, cart_nb_diff, cart_rf_diff,
+               md_nb_diff, md_rf_diff, nb_rf_diff)
+
+# Get symmetric limits based on maximum absolute difference
+max_abs <- ceiling(max(abs(all_diffs)))
+y_limits <- c(-max_abs, max_abs)
+
+# Create plots with identical y-axis scales
+create_ba_plot <- function(x1, x2, title) {
+  differences <- x1 - x2
+  mean_diff <- mean(differences)
+
+  ggplot(monthly, aes(x = (x1 + x2)/2, y = differences)) +
+    geom_point(alpha = 0.6) +
+    geom_hline(yintercept = mean_diff, color = "red") +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    labs(title = title, x = "Mean (ha)", y = "Difference (ha)") +
+    ylim(y_limits) +  # Enforce global y-axis limits
+    theme_minimal(base_size = 10)
+}
+
+# Generate all plots
+ba1 <- create_ba_plot(monthly$wa_cart_ha, monthly$wa_md_ha, "CART vs MD")
+ba2 <- create_ba_plot(monthly$wa_cart_ha, monthly$wa_nb_ha, "CART vs NB")
+ba3 <- create_ba_plot(monthly$wa_cart_ha, monthly$wa_rf_ha, "CART vs RF")
+ba4 <- create_ba_plot(monthly$wa_md_ha, monthly$wa_nb_ha, "MD vs NB")
+ba5 <- create_ba_plot(monthly$wa_md_ha, monthly$wa_rf_ha, "MD vs RF")
+ba6 <- create_ba_plot(monthly$wa_nb_ha, monthly$wa_rf_ha, "NB vs RF")
+
+# Combine plots
+combined_plot <- (ba1 + ba2 + ba3) / (ba4 + ba5 + ba6) +
+  plot_annotation(
+    title = "Bland-Altman Plots: Pairwise Comparison of Water Area Classifiers",
+    theme = theme(plot.title = element_text(hjust = 0.5, face = "bold")))
+
+# Display the combined plot
+ggsave("Bland-Altman_combined_plot.pdf")
+```
